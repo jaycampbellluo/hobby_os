@@ -1,3 +1,9 @@
+.globl get_el
+get_el:
+	mrs x0, CurrentEl
+	lsr x0, x0, #2
+	ret
+
 .globl put32
 put32:
 	str w1, [x0]

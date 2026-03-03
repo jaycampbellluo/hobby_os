@@ -21,17 +21,34 @@ prog_hang:
 	b proc_hang
 
 
+master:
+	ldr x0, =SCTLR_VALUE_MMU_DISABLED
+	msr sctlr_el1, x0
+	
+	ldr x0, =HCR_VALUE
+	msr hcr_el2, x0
+	
+	ldr x0, =SCR_VALUE
+	msr scr_el3, x0
+	
+	ldr x0, =SPSR_VALUE
+	msr spsr_el3, x0
+	
+	adr x0, el1_entry
+	msr elr_el3, x0
+	
+	eret
+
+
 // this function cleans the .bss section by calling memzero
 // memzero accepts two args: the start address (bss_begin)
 // and the size of the area that needs to be clearned (bss_end - bss_begin)
-master:
+
+el1_entry:
 	adr	x0, bss_begin
 	adr	x1, bss_end
-	sub	x1, x1, x0
-	bl	memzero
-
-// after cleaning the .bss section, we intialize the stack pointer
-// and execute the kernel_main function
+	sub	x1, x1, x0		// after cleaning the .bss section, we intialize the stack pointer
+	bl	memzero			// and execute the kernel_main function
 	mov	sp, #LOW_MEMORY // LOW_MEMORY is defined in mm.h and is = to 4mb
 	bl	kernel_main
-
+	b proc_hang			// should never get here
