@@ -1,0 +1,383 @@
+--- bare metal printf and other utils ---
+there are several permutations of integer types we need to support. these are:
+unsigned int
+signed int
+unsigned long int
+signed long int
+
+we also want to support printing in different bases. these are:
+binary (base 2),
+decimal (base 10),
+hex (base 16).
+
+///// how are function pointers denoted in c?
+
+we convert each of these types of integers into ascii characters and then write them into some output pointer
+provided by our printf callee. the code for conversion is the same across all of the different types, 
+but the function signatures differ by the input num type.
+
+the function signatures for these must support an int flag input, which will be used by callees
+that are trying to print hex numbers to signal whether the character should be uppercase or not.
+
+the crux of the problem is that ascii values for digits are not the same as their numerical value.
+so the ascii value for 9 is not '9'.
+
+we also have functions for converting from ascii char into decimal, and from ascii chars into an integer.
+these are relatively straight forward.
+
+printf takes in variadic arguments. this means that we can provide n args to our printf statement, and it
+will handle them all. in c, functions with variadic arguments have an ellipses in the function signature.
+the arguments we pass to the printf statement are converted into a c native struct called a va_list. 
+our printf functoin doesn't actualy handle printing itself. it is provided with a void *ptr, which it writes
+into. in our hobby os, this will point to the uart output.
+
+---
+conversion int -> ascii:
+    iterate through the place values of the input number. this gives us the value of the lowest "digit" in that
+    base.
+    if the digit we're looking at is less than 10, its ascii value will be the ascii of '0' + digit.
+    if the digit is larger than 10 (which will happen in base 16), we need to use ascii alphabetical symbols
+    to represent the digit, because 0-9 can only represent numbers in base 10 or lower. in this case,
+    the ascii value of the digit will be the ascii value of digit + 'A' - 10 if the uppercase flag is set,
+    otherwise it will be the ascii value of digit + 'a' - 10. the subtraction is there because:
+        if we want the value 10 to become the ascii 'A' or 'a', we can't just do digit + 'A'. this will give us
+        an ascii value that is 10 higher than 'A'.
+    we write this value into our output buffer and continue to the next digit.
+    after all the digits have been written into the buffer, we append an 0 (char, not ascii value '0') to the end 
+    of the buffer as a terminal character.
+
+putting a number with fill chars:
+    decide whether you want your fill char to be ' ' or '0'.
+
+
+tfp_format:
+    create some char buffer of fixed length. this will be where we write any integer-to-ascii conversions
+    we do.
+
+    iterate over the format string one char at a time.
+    if the char is ordinary text, send the char to our put pointer using our put function.
+    if the char is a %, we consume it and move to the next token.
+    we need to do some checks before we get to our actual handling of the variadic argument:
+        if the new char is a '0', we want to have our output number padded with '0', rather than ' '. we incr our ch
+        pointer after this.
+        if the char is between '0' and '9', 
+        if the char is 'l', we set a long flag to true and then increment out ch pointer.
+    we can now match on our ch pointer:
+        if 'u':
+            convert the unsigned (either long or not, depending on long support) int to ascii and write it into
+            the buffer we created at the start of the function. 
+            use our special put with fill chars function to write to our output pointer using a putter function,
+            using base 10, with the width we want, whether we want leading zeroes and the buffer we just wrote into.
+        if 'd':
+            convert signed (either long or not) int to ascii and write into the buffer we created.
+            use put with fill chars to write to output pointer, same as above.
+        if 'x' or 'X':
+            convert unsigned hex int to ascii and write into the buffer we created.
+            use put with fill chars to write to output pointer, same as above except with base 16.
+        if 'c':
+            use put function (no need for any i2a conversions or padding) to write to put pointer. the 
+            buffer we pass the put function is the variadic arg macro cast to a char pointer.
+        if 's':
+            use put with fill chars to write to output pointer, with the leading zeroes flag set to 0 (so no lzs).
+        case '%':
+            write a literal '%' using put function.
+        _:
+            break;
+
+init_printf:
+    we set the static global stdout_putf function to the provided function.
+    we set the static void *stdout_putp pointer to the provided pointer.
+
+tfp_printf:
+    provided with a format string and variadic args.
+    declares a va_list struct and uses the macro va_start(created struct, format string) to populate.
+    calls tfp_format, passing stdout_putp, stdout_putf, format string and the va list.
+    destructs the va list using the macro va_end(va).
+
+putcp: ### COME BACK TO THIS.
+    writes a char at a given pointer. the syntax for this is fucked so i'm just going to write it down.
+    static void putcp(void *p, char c) {
+        *(*((char**)p))++ = c
+    }
+
+    this fuckery has to do with allowing us to write at a series of memory addresses next to each other.
+    if we have a pointer at the memory we're tring to write a char at, 
+    
+    we can't do any pointer manipulation to write a character into the address after 
+    the one we're currently pointing at. 
+    
+    we'd increment the value stored
+    at that address, rather than incrementing the pointer and moving it to the next address (which is what 
+    we want). instead, if we have a **p++, we no longer have a pointer to the address in memory we want to write
+    to, we have a pointer to that pointer. if we now dereference this pointer
+
+tfp_sprintf:
+
+
+---
+
+
+--- timer and hardware interrupts ---
+our timer functionality is very basic. we need to init it with some interval, after which it will issue an
+interrupt. after it interrupts, we read the value of the timer, add some interval to it and write it back into
+the timer, after which it will trigger another interrupt.
+
+
+
+--- processes --- ######### NEED TO FINISH
+we need a struct to capture the state of a process. in linux, this is called a task_struct.
+the task struct encapsulates the:
+    cpu context,
+    state,
+    counter,
+    priority,
+    preempt count
+of the process
+
+the cpu context encapsulates the values stored in the registers x19-x28 + fp (x29), sp and pc (x30).
+
+
+--- exception types ---
+
+there are four types of exceptions:
+    synchronous exception:
+        these are generated by userspace processes, either via an intentional instruction,
+        svc, or because they've tried to do something incorrect, like access memory
+        at a non-existent address or an address that process doesn't have access to.
+        they're called synchronous exceptions because the processor only does one thing
+        at a time, i.e everything that the processor does happens synchronously.
+    IRQ, interrupt request, also called asynchronous exceptions:
+        these are generated by hardware, such as a timer. they're called asynchronous
+        exceptions because they have nothing to do with the instruction the processor 
+        is currently trying to execute. 
+    FIQ, fast interrupt request:
+        these are exceptions with high priority and are generated by hardware, like IRQs.
+    SError, system error:
+        these are also generated by hardware, but they always indicate some error condition,
+        whereas other exceptions may be non-error requests.
+
+--- exception vectors ---
+
+there are several different states the processor can be in when an exception is thrown. there are also several 
+different exceptions that can be thrown. each permutation of exception/processor state needs its own handler.
+
+say we've generated an exception and now our processor has moved into el1 to handle it.
+the four states the processor could be are:
+
+the four states the processor could be in are:
+    EL1h:
+        the exception was generated while the processor was in el1, but the stack pointer the el1 process was
+        using at the time the exception was generated was the el0 stack pointer.
+
+    EL1t:
+        the exception was generated while the processor was in el1, and the stack pointer the el1 process was
+        using was its own el1 stack pointer.
+
+    EL0_64:
+        the exception was generated while the processor was in el0, running in 64 bit mode (remember, we are
+        now in el1 because we have promoted our el from 0 to 1 in order to handle this exception).
+
+    EL0_32:
+        the exception was generated while the processor was in el0, running in 32 bit mode (remember, we are
+        now in el1 because we have promoted our el from 0 to 1 in order to handle this exception).
+
+in total, we have to define 16 exception/processor state permutations. we have to have a unique handler for
+each of these.
+
+the vector table is the struct that holds these 16 handlers. each of the 16 handlers that populate the table
+is an exception vector. each exception vector must be exactly 0x80 bytes long, but we are
+allowed to jump to code outside of the exception vector when we are handling the exception.
+
+whenever we handle an exception, we have to save our processor state before we handle it (see kernel entry &
+exit below). 
+
+in this os implementation, our vector table becomes 16 macro definitions, one after the other. the vector
+entry macro takes in a label and branches to that label. our macro must use a .align directive so that each of
+our exception vectors is 0x80 bytes long.
+
+in this os implementation, the only exception vector have a proper handler defined for is an IRQ from EL1h 
+(this will handle our timer interrupts for us).
+
+---
+(macro) vector_entry:
+provide the macro with a label.
+include a align 7 directive so that our next vector entry is 0x80 bytes after this one.
+branch to the provided label.
+
+irq_vector_init:
+get the address where we've stored the first exception vector into x0.
+move from register x0 into special register vbar_el1. we'll use this later whenever we want to get a handler.
+ret.
+
+(macro) handle_invalid_entry_type:
+save processor state before we start handling the exception (call kernel_entry macro).
+move the value of the "type" arg passed to the macro (accessed via #\type) into x0.
+move to register x1 from special register esr_el1.
+move to register x2 from special register elr_el1.
+branch with link to the show_invalid_entry_message, which will use the values in x0, x1 and x2.
+branch to err_hang macro. this is because this is for handling errors we don't know how to recover from.
+
+//////////////// return processor to pre-exception state (call kernel_exit macro).
+---
+
+--- masking & unmasking interrupts ---
+
+masking interrupts prevents them from triggering. there are some pieces of code that we never want to be interrupted.
+for example, any time we're saving/restoring processor state (kerne_entry and kernel_exit). if we were to trigger
+and interrupt in the middle of one of these, we'd lose the processor state we're trying to save or restore.
+
+i believe masking interrupts only means that the interrupt is not handled right now, rather than disappearing
+completely. i believe that once we unmask the interrupt type, any interrupts that occurred during the masking
+will be handled.
+
+we always mask interrupts when we trigger exception handlers, then unmask them (reenable them) once we're done
+saving processor state. we can actually unmask interrups as soon as we're finished saving our processor state,
+which allows us to have nested interrupts. if we were going to do this, we'd have to remask before we try and
+load our previous processor state.
+
+there is a single special register responsible for masking exceptions, and another special register for unmasking.
+the bits in these registers control which types of exceptions are masked/unmasked. although there are two
+separate registers, one for turning masks on and one for turning them off, they both control a single mask state.
+this is done because it means we only need to worry about changing the one mask bit we care about. we don't have to
+worry about whether any of the other bits are set and whether we need to preserve them.
+for example, if we're masking all exceptions and want to unmask IRQs, we only have to use a single instruction:
+    msr daifset, #2
+and we don't have to worry about preserving the state of the other 3 bits.
+
+the different settings are:
+    D, debug exceptions:
+        these are a special type of synchronous exception. they're generally related to breakpoints or
+        debuggers. 
+        most synchronous exceptions are not maskable. because they're associated with the process' instruction
+        flow, its pretty much impossible to continue on in the instruction flow without having handled the exception
+        (think we call malloc in userspace. if we've masked synchronous interrupts and haven't allocated memory as a 
+        result, the subsequent write to the memory we've requested will be invalid).
+
+    A: SError exceptions:
+        these are abbreviated with 'A' because they're also called asynchronous interrupts.
+
+    I: IRQ exceptions
+
+    F: FIQ exceptions
+
+---
+enable_irq:
+    move the immediate 2 into the special register daifclr. (this will only mask IRQs)
+    ret.
+
+disable_irq:
+    move the immediate 2 into the special register daifset. (this will only mask IRQs)
+    ret.
+---
+
+--- interrupt controller --- ###### NOT FINISHED.
+interrupts generated by hardware don't interrupt the CPU directly. instead, the interact with an interrupt
+controller, which gets the CPU to take an interrupt and then go to the exception vector containing the
+code for handling the interrupt. the interrupt controller can also be used to disable interrupts generated
+by hardware.
+
+the raspberry pi has 3 registers which act as its interrupt controller. each of the bits in these three regs
+are responsible for masking different interrupts. the registers are:
+    
+
+--- kernel entry & exit ---
+
+the kernel entry and exit macros are for saving processor state when exceptions are generated.
+this allows us to handle an exception and then resume from the exact state that the
+processor was in before it entered exception handling
+
+for a simple os, all we need to do is save registers x0-x30 to the stack by
+allocating space on the stack by moving the sp, then storing pairs of registers
+using the stp instruction.
+
+---
+kernel_entry:
+we add S_FRAME_SIZE onto the stack (remember, the stack grows down, so "add" here means sub).
+we store pairs of x registers (x0, x1) onto the stack starting at sp.
+for each additional pair we store, we provide our store pair instruction with (sp + (16 * n))
+which stores from the sp back up.
+our last register, x30, will not have a pair and should use str instead of stp.
+
+kernel_exit:
+we're not allocating anything to the stack here, so we don't need to perform a sub from sp.
+we load values from the stair into pairs of registers starting at sp.
+when we stored these values onto the stack, two registers went into a single space on the
+stack, so when we're reading back out, a single space on the stack will go into two regs.
+for each additional pair we load, we privde the load pair instruction with (sp + (16 * n)).
+our last register, x30, will not have a pair and should use ldr instead of stp.
+we need to move the stack pointer back up, because we're done with this stack space.
+we do this by adding S_FRAME_SIZE back onto sp.
+we execute an eret, returning us to normal function.
+---
+
+--- lowering the kernel from el3 to el1 ---
+
+we boot the kernel in el3 and need to lower it to el1.
+we do this by overwriting the values of several system registers, and then executing an eret.
+the system registers we overwrite control the exception level the current process is operating in,
+so when we execute the eret, we jump into el1 instead of returning to el3.
+
+we start out by defining some constants:
+SCTLR_VALUE_MMU_DISABLED = the hardware value disabling the MMU
+HCR_VALUE
+SCR_VALUE
+SPSR_VALUE
+
+---
+we load SCTLR_VALUE_MMU_DISABLED from memory into a register (x0).
+we move from that register into the sctlr_el1 system reg.
+
+we load HCR_VALUE from memory into a register (x0).
+we move from that register into the hcr_el2 system reg.
+
+we load SCR_VALUE from memory into a register (x0).
+we move from that register into the scr_el3 system reg.
+
+we load from SPSR_VALUE from memory into a register (x0).
+we move from that register into the spsr_el3 system reg.
+
+we put the address of the label el1_entry from memory into a register.
+we load from that register into the elr_el3 system reg.
+
+we execute an eret. this sets processor state to our custom setting we've put in spsr_el3,
+and jumps to the custom address we've put in elr_el3.
+----
+
+we have other versions of these status registers for controlling the same functionality
+at other exception levels. these other versions have different _elX suffixes.
+for example, the elr_el2 system register controls where el2 jumps to when the process 
+is in el2 and an eret is executed. some of these registers only exist for el3 because
+they control functionality that doesn't exist at lower els. for example, el3 is the only
+el that can configure whether lower els run in "secure" or "non-secure" mode and the scr_el3
+register controls this. because this functionality doesn't exist at a lower el, there is no
+scr_el2 or scr_el1 equivalent.
+
+the status registers we use in the above code have special purposes. these are:
+
+sctlr_el1:
+    this controls behaviour of the processor in el1. "behaviour" here means whether the MMU is on/off,
+    what the cache/alignnment bits are set to and other execution behaviour.
+
+hcr_el2:
+    this controls virtualization settings, or how el1 will function when an el2
+    exists above it and is controlling it.
+
+scr_el3:
+    this controls how we hand off from el3 to a lower el.
+    these controls are whether the new el runs in AArch64 or AArch32, whether the new
+    exception level runs in "secure" or "non-secure" mode.
+
+spsr_el3:
+    the saved program status register. we manually overwrite this so that when we execute
+    our eret instruction, we load some special el1 state back, rather than the same state
+    the processor was in when we entered this instruction. "state" here means:
+        which stack pointer we're currently using,
+            (note: an el can either use its own sp, or the sp of el0.
+            EL1t = sp of el0.
+            EL1h = sp of el1.)
+        which exceptions are masked,
+        what the condition flags are,
+
+elr_el3:
+    holds the address we return to when an eret instruction is executed. !!! what is the value 
+    stored in el1_entry?
