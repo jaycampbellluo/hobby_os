@@ -126,15 +126,93 @@ the timer, after which it will trigger another interrupt.
 
 --- processes --- ######### NEED TO FINISH
 we need a struct to capture the state of a process. in linux, this is called a task_struct.
-the task struct encapsulates the:
+the task struct encapsulates:
     cpu context,
-    state,
-    counter,
-    priority,
-    preempt count
-of the process
+    state (whether the task is running or not),
+    counter (determines how much longer the process will run. once it reaches 0, a new task will be scheduled),
+    priority (priority is added on to counter. a higher priority task will run for longer),
+    preempt count (if nonzero, the task is currently executing some task that should not be interrupted)
 
 the cpu context encapsulates the values stored in the registers x19-x28 + fp (x29), sp and pc (x30).
+i don't understand why we don't need to save the bottom 19 registers
+
+when we boot the os, the scheduler is turned off and the only thing running is the kernel initialization.
+before we can turn the scheduler on, we need to create a list of processes to schedule and add the kernel init
+to this.
+
+our list of tasks is just a fixed size array of task_structs. we'll just use 64 tasks for now.
+we also need to have a pointer to the currently executing task.
+
+every process we run needs its own stack. to support this, we have some very basic malloc functionality.
+
+we define some map of memory, which is just an array of ints with some predefined length (not sure if this is something we set,
+or if we calculate this from the total amount of free memory / page size). these ints represent free pages of memory.
+
+we need a function for marking a page as used in our memory map, and a function to mark it free.
+on a pi, the total memory is 1gb. the last mb is reserved for device registers and the first 4mb are reserved for the kernel image
+and the kernel initialisation stack.
+
+copying a process doesn't immediately start running that process. instead, we are
+just adding it to our tasks array.
+
+the schedule function is the main way we switch which process is running. schedule is either called when the current process cannot be terminated,
+but has nothing to do, such as an process waiting for i/o, or the kernel proper. schedule is also called by the timer interrupt handler.
+
+when the timer interrupts, we decrement the current process' counter. if the counter is still not zero, or if the process should not be interrupted
+(preempt counter), we immediately return, meaning the process doesn't get interrupted. if not, we REENABLE interrupts, set the counter to 0, call schedule 
+and then DISABLE interrupts. note that we enable interrupts. we're inside an interrupt handler, where interrupts are typically disabled.
+
+schedule function iterates over our tasks array to find the currently running process.
+it marks the next process as 
+
+for the real context switch, which happens when we switch process, we have some switch_to fn.
+this takes in some pointer to a next process, checks whether the next process is the current process and if not, executes an asm script to
+perform the conext switch.
+
+the asm context switch code computes some storage memory location to store the current process' memory.
+it then stores pairs of registers x19-x30 out to this storage location.
+we adjust our reading address register and load pairs to x19-x30
+
+we can actually switch processes while handling an interrupt. this presents an issue because our kernel exit function will jump to the address stored in
+spsr_el1 and elr_el1 registers, which if it isn't updated when we update the process we're currently running, will no longer be the correct address.
+
+
+
+
+---
+copy_process:
+    takes in a function and an argument.
+    prevent this task from being interrupted (preempt flag).
+    create a pointer to a new task_struct.
+    try and get a free page from memory.
+    if there are no free pages, return an error int value.
+    set the values of the new task_struct fields using the fields of the current process.
+    the preempt_count of the new task should be set to 1 (disable interrupts).
+    set the cpu_context register x19 to the input function.
+    set the cpu_context register x20 to the input argument.
+    set the cpu_context register pc (x28?) to the ret_from_fork function?
+    set the cpu_context register sp (x29?) to the self pointer + THREAD_SIZE ##### WTF IS THREADSIZE HERE?
+    create a new process id by incrementing the number of live processes.
+    add the process into the task array.
+    reenable task interruption. 
+    return happy int value.
+
+ret_from_fork:
+    branch with link to schedule_tail (just sets the current process' to being uninterruptible).
+    move x20 into x0.                   ######## what does this move accomplish?
+    blr x19 (should never execute).
+
+schedule:
+
+
+
+
+toy_process:
+    enter infinite loop
+    send the first five chars of an input char array to uart
+    wait
+
+---
 
 
 --- exception types ---
